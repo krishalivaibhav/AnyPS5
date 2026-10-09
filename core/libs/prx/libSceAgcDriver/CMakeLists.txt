@@ -242,6 +242,7 @@ target_include_directories(agc_driver_tests PRIVATE
         ${LIBS_INCLUDE_DIR}
         ${CMAKE_SOURCE_DIR}/core/shader/recompiler
         ${CMAKE_SOURCE_DIR}/3rdparty/Vulkan-Headers/include
+        ${CMAKE_SOURCE_DIR}/3rdparty/SPIRV-Headers/include
 )
 
 target_link_libraries(agc_driver_tests PRIVATE
