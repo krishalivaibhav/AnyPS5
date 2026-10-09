@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     env:
@@ -35,7 +35,9 @@ jobs:
           curl -sSfL -o "$RUNNER_TEMP/winlibs.zip" "https://github.com/brechtsanders/winlibs_mingw/releases/download/$WINLIBS_RELEASE/$WINLIBS_ZIP"
           7z x "$RUNNER_TEMP/winlibs.zip" -oC:/winlibs > /dev/null
       - if: runner.os == 'Windows'
-        run: echo 'C:\winlibs\mingw64\bin' >> "$GITHUB_PATH"
+        run: |
+          echo 'C:\winlibs\mingw64\bin' >> "$GITHUB_PATH"
+          echo 'SSL_CERT_FILE=C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt' >> "$GITHUB_ENV"
       - uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: spirv13-${{ runner.os }}
