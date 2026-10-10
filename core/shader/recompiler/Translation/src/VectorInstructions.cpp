@@ -31,6 +31,7 @@ std::uint32_t TranslationContext::f32DenormalFlushFor(const RdnaInstruction& ins
     case RdnaOpcode::VSubrevF32:
     case RdnaOpcode::VMulF32:
     case RdnaOpcode::VMulLegacyF32:
+    case RdnaOpcode::VMullitF32:
     case RdnaOpcode::VMinF32:
     case RdnaOpcode::VMaxF32:
     case RdnaOpcode::VMin3F32:
@@ -85,8 +86,13 @@ std::uint32_t TranslationContext::f32DenormalFlushFor(const RdnaInstruction& ins
     case RdnaOpcode::VCvtPkU8F32:
     case RdnaOpcode::VCvtPkrtzF16F32:
     case RdnaOpcode::VCvtF16F32:
+    case RdnaOpcode::VDivFixupF32:
+    case RdnaOpcode::VMadMixloF16:
+    case RdnaOpcode::VMadMixhiF16:
         flush = 1u;
         break;
+    case RdnaOpcode::VMadLegacyF32:
+        return 3u;
     default:
         return 0u;
     }
@@ -809,11 +815,13 @@ bool TranslationContext::emitVector(const RdnaInstruction& inst) {
     case RdnaOpcode::VAshrrevI16:
         return integer16Shift(inst, IrOpcode::ShiftRightArithmetic32, true);
     case RdnaOpcode::VAddNcU16:
-    case RdnaOpcode::VAddNcI16:
         return integer16Binary(inst, IrOpcode::IAdd32, false);
+    case RdnaOpcode::VAddNcI16:
+        return integer16Binary(inst, IrOpcode::IAdd32, true);
     case RdnaOpcode::VSubNcU16:
-    case RdnaOpcode::VSubNcI16:
         return integer16Binary(inst, IrOpcode::ISub32, false);
+    case RdnaOpcode::VSubNcI16:
+        return integer16Binary(inst, IrOpcode::ISub32, true);
     case RdnaOpcode::VMed3I16:
         return vMed3I16(inst);
     case RdnaOpcode::VMin3I16:
@@ -1113,16 +1121,10 @@ bool TranslationContext::emitVector(const RdnaInstruction& inst) {
         return simpleInteger(inst, IrOpcode::BitReverse32, IrType::U32, false, false, false);
     case RdnaOpcode::VFfblB32:
         return simpleInteger(inst, IrOpcode::FindILsb32, IrType::U32, false, false, false);
-    case RdnaOpcode::VLshlB32:
-        return simpleInteger(inst, IrOpcode::ShiftLeftLogical32, IrType::U32, false, true, false);
     case RdnaOpcode::VLshlrevB32:
         return simpleInteger(inst, IrOpcode::ShiftLeftLogical32, IrType::U32, true, true, false);
-    case RdnaOpcode::VLshrB32:
-        return simpleInteger(inst, IrOpcode::ShiftRightLogical32, IrType::U32, false, true, false);
     case RdnaOpcode::VLshrrevB32:
         return simpleInteger(inst, IrOpcode::ShiftRightLogical32, IrType::U32, true, true, false);
-    case RdnaOpcode::VAshrI32:
-        return simpleInteger(inst, IrOpcode::ShiftRightArithmetic32, IrType::U32, false, true, false);
     case RdnaOpcode::VAshrrevI32:
         return simpleInteger(inst, IrOpcode::ShiftRightArithmetic32, IrType::U32, true, true, false);
     case RdnaOpcode::VLshlrevB64:

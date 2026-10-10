@@ -901,6 +901,25 @@ struct WriteTracker {
 #endif
     }
 
+    bool unchanged(std::uint64_t first, std::uint64_t last, std::uint64_t since) const {
+        if (first == last) return stampOf(first) <= since;
+        const auto newer = [since](std::uint32_t stamp) { return stamp > since; };
+#ifdef _WIN32
+        return std::none_of(blocks.begin() + first, blocks.begin() + last + 1, newer);
+#else
+        while (first <= last) {
+            const auto index = first / LeafBlocks;
+            const auto end = std::min<std::uint64_t>(last + 1, (index + 1) * LeafBlocks);
+            if (const auto& leaf = leaves[index]; leaf != nullptr) {
+                const auto begin = leaf->blocks.begin() + first % LeafBlocks;
+                if (std::any_of(begin, begin + (end - first), newer)) return false;
+            }
+            first = end;
+        }
+        return true;
+#endif
+    }
+
     std::uint32_t cpuStampOf(std::uint64_t block) const {
 #ifdef _WIN32
         return cpuBlocks[block];
@@ -1077,8 +1096,8 @@ std::uint64_t collectWrites(std::uint64_t address, std::size_t bytes, bool memoi
     auto& tracker = Tracker();
     // Whole pages, so a page shared with the next range is collected with either.
     constexpr std::uint64_t page = 4096;
-    const auto first = address & ~(page - 1);
-    const auto stop = (address + bytes + page - 1) & ~(page - 1);
+    auto first = address & ~(page - 1);
+    auto stop = (address + bytes + page - 1) & ~(page - 1);
     // One epoch for the lookup and the entry made after the walk: an unbumped thread's fresh epoch
     // must not differ between them.
     const auto epoch = currentCollectEpoch();
@@ -1110,6 +1129,16 @@ std::uint64_t collectWrites(std::uint64_t address, std::size_t bytes, bool memoi
         }
     }
     const TimedAccess timed(CounterCollect, bytes);
+#ifndef _WIN32
+    if (useMemo && threadCollectEpoch != 0 && bytes <= WriteBlockBytes) {
+        const auto begin = first & ~(WriteBlockBytes - 1);
+        const auto end = (stop + WriteBlockBytes - 1) & ~(WriteBlockBytes - 1);
+        if (end > begin && tracker.covers(begin, end - begin)) {
+            first = begin;
+            stop = end;
+        }
+    }
+#endif
     if (!walkWrites(tracker, first, stop, StampKind::Cpu)) return 0;
     // Only a completed walk is remembered; a failed one (uncommitted pages) returned 0 above.
     if (collectMemoEnabled()) {
@@ -1137,6 +1166,10 @@ void BumpCollectEpoch() {
 
 std::uint64_t CollectEpochBumps() {
     return collectEpochBumps.load(std::memory_order_relaxed);
+}
+
+std::uint64_t CollectEpoch() {
+    return collectMemoEnabled() ? threadCollectEpoch : 0;
 }
 
 namespace {
@@ -1200,10 +1233,7 @@ bool UnchangedSince(std::uint64_t address, std::size_t bytes, std::uint64_t gene
     if (!tracker.watched || generation == 0 || bytes == 0 || !tracker.covers(address, bytes)) return false;
     const auto first = tracker.blockOf(address);
     const auto last = tracker.blockOf(address + bytes - 1);
-    for (auto block = first; block <= last; ++block) {
-        if (tracker.stampOf(block) > generation) return false;
-    }
-    return true;
+    return tracker.unchanged(first, last, generation);
 }
 
 bool UnchangedSinceAll(std::span<const UnchangedQuery> queries) {
@@ -1215,9 +1245,7 @@ bool UnchangedSinceAll(std::span<const UnchangedQuery> queries) {
         if (generation == 0 || bytes == 0 || !tracker.covers(address, bytes)) return false;
         const auto first = tracker.blockOf(address);
         const auto last = tracker.blockOf(address + bytes - 1);
-        for (auto block = first; block <= last; ++block) {
-            if (tracker.stampOf(block) > generation) return false;
-        }
+        if (!tracker.unchanged(first, last, generation)) return false;
     }
     return true;
 }
@@ -1225,8 +1253,9 @@ bool UnchangedSinceAll(std::span<const UnchangedQuery> queries) {
 std::uint64_t storeOwn(std::uint64_t address, std::size_t bytes, const std::function<std::pair<std::uint64_t, std::uint64_t>()>& store) {
     if (bytes == 0) return 0;
     const auto stampStored = [](WriteTracker& tracker, std::pair<std::uint64_t, std::uint64_t> stored) -> std::uint64_t {
-        if (stored.second <= stored.first || !tracker.watched || !tracker.covers(stored.first, static_cast<std::size_t>(stored.second - stored.first))) return 0;
+        if (stored.second <= stored.first) return 0;
         ++tracker.generation;
+        if (!tracker.watched || !tracker.covers(stored.first, static_cast<std::size_t>(stored.second - stored.first))) return 0;
         for (auto block = tracker.blockOf(stored.first); block <= tracker.blockOf(stored.second - 1); ++block) {
             tracker.stamp(block, tracker.generation, StampKind::Driver);
             tracker.noteDriverStore(block, stored.first, stored.second, tracker.generation);
@@ -1256,14 +1285,24 @@ std::uint64_t StoreOwnBytes(std::uint64_t address, std::size_t bytes, const std:
     });
 }
 
+std::uint64_t StoreOwnBytes(std::uint64_t address, std::span<const std::byte> source) {
+    return StoreOwnBytes(address, source.size(), [&] {
+#ifndef _WIN32
+        if (GuestWriteWatch::GuestWriteWatchAvailable_nid_postfix() && GuestArena::GuestArenaWriteSharedBacking_nid_no_patch(address, source.data(), source.size())) return;
+#endif
+        std::memcpy(reinterpret_cast<void*>(address), source.data(), source.size());
+    });
+}
+
 std::uint64_t MarkWritten(std::uint64_t address, std::size_t bytes) {
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
     tracker.initialize();
-    if (!tracker.watched || bytes == 0 || !tracker.covers(address, bytes)) return 0;
+    if (bytes == 0) return 0;
+    ++tracker.generation;
+    if (!tracker.watched || !tracker.covers(address, bytes)) return 0;
     const auto first = tracker.blockOf(address);
     const auto last = tracker.blockOf(address + bytes - 1);
-    ++tracker.generation;
     for (auto block = first; block <= last; ++block) {
         tracker.stamp(block, tracker.generation, StampKind::Driver);
         tracker.noteDriverStore(block, address, address + bytes, tracker.generation);
@@ -1844,7 +1883,8 @@ void Write(std::uint64_t address, std::span<const std::byte> source, std::size_t
     auto* destination = reinterpret_cast<void*>(address);
     CheckRange(destination, source.size(), alignment, true);
     // Stamped like a GPU write: a collect memoized for this packet would not see the page fault.
-    StoreOwnBytes(address, source.size(), [&] { std::memcpy(destination, source.data(), source.size()); });
+    if (source.size() >= PageBytes) StoreOwnBytes(address, source);
+    else StoreOwnBytes(address, source.size(), [&] { std::memcpy(destination, source.data(), source.size()); });
 }
 
 }

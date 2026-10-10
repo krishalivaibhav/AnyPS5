@@ -1,5 +1,6 @@
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
 #include "Recompiler.hpp"
+#include "execution/VulkanTestDevice.hpp"
 #include "prx/libc/include/GuestAllocations.hpp"
 #include <array>
 #include <cmath>
@@ -36,6 +37,13 @@ alignas(256) constexpr std::array<std::uint32_t, 104> GeometryCode{
     0xf8000941, 0x0000002a, 0xbefe04c1, 0x7da8140e, 0xbf88000a, 0x34561485, 0xdbfc0400, 0x2c00002b,
     0xdbfc0410, 0x3000002b, 0xbf8cc07f, 0xf80008cf, 0x2f2e2d2c, 0xf800020f, 0x33323130, 0xbf810000,
 };
+
+alignas(256) constexpr auto Wave32GeometryCode = [] {
+    auto code = GeometryCode;
+    code[10] = 0x04190a6bu;
+    code[28] = 0x04250a02u;
+    return code;
+}();
 
 alignas(256) constexpr std::array<std::uint32_t, 7> PixelCode{
     0xc8020002, 0xc8060102, 0xc80a0202, 0xc80e0302, 0xf800180f, 0x03020100, 0xbf810000,
@@ -118,6 +126,7 @@ struct MeshDraw {
     std::array<std::uint32_t, 4> vertexBuffer;
     std::uint32_t geometryPushBytes = ShaderRecompiler::MeshDrawPushOffsetBytes;
     bool restart = false;
+    std::uint32_t waveSize = 64u;
 };
 
 void DrawMesh(AgcDriver::VulkanDevice& device, const MeshDraw& setup) {
@@ -126,10 +135,11 @@ void DrawMesh(AgcDriver::VulkanDevice& device, const MeshDraw& setup) {
     const auto index = AgcDriver::Graphics::MeshIndexBufferDescriptor(setup.draw);
     std::copy(index.begin(), index.end(), userData.begin() + ShaderRecompiler::MeshIndexBufferUserWord);
     std::copy(setup.vertexBuffer.begin(), setup.vertexBuffer.end(), userData.begin() + 8);
-    const std::array<ShaderRecompiler::MemoryRegion, 1> geometryMemory{{{reinterpret_cast<std::uintptr_t>(GeometryCode.data()), std::as_bytes(std::span(GeometryCode))}}};
+    const auto& code = setup.waveSize == 32u ? Wave32GeometryCode : GeometryCode;
+    const std::array<ShaderRecompiler::MemoryRegion, 1> geometryMemory{{{reinterpret_cast<std::uintptr_t>(code.data()), std::as_bytes(std::span(code))}}};
     ShaderRecompiler::RecompileRequest geometry{
-        {ShaderStage::Mesh, reinterpret_cast<std::uintptr_t>(GeometryCode.data()), GeometryCode, 0, {}},
-        {64, 0, userData, std::nullopt, std::nullopt, ShaderRecompiler::ShaderVertexStageInfo{}, geometryMemory},
+        {ShaderStage::Mesh, reinterpret_cast<std::uintptr_t>(code.data()), code, 0, {}},
+        {setup.waveSize, 0, userData, std::nullopt, std::nullopt, ShaderRecompiler::ShaderVertexStageInfo{}, geometryMemory},
         target,
         {0, 0, 0, setup.geometryPushBytes},
         ShaderRecompiler::GraphicsCompileContext{0, {}, setup.mesh, std::nullopt, {setup.draw.indexAddress, setup.draw.indexCount, setup.draw.indexSize, setup.draw.instanceCount}}
@@ -158,7 +168,7 @@ void DrawMesh(AgcDriver::VulkanDevice& device, const MeshDraw& setup) {
     }};
 
     AgcDriver::Graphics::State state{};
-    state.stages = {AgcDriver::Graphics::ShaderPath::Geometry, 0x20u, 64, 64, setup.mesh, std::nullopt};
+    state.stages = {AgcDriver::Graphics::ShaderPath::Geometry, 0x20u, setup.waveSize, 64, setup.mesh, std::nullopt};
     state.color = {reinterpret_cast<std::uintptr_t>(Pixels.data()), {Width, Height}, VK_FORMAT_R8G8B8A8_UNORM, Pixels.size(), 0xe4u};
     state.colors = {state.color};
     state.hasColorTarget = true;
@@ -240,11 +250,17 @@ int main() {
         }
         FanRestart[FanRim] = 0xffffu;
 
-        AgcDriver::VulkanDevice device;
+        const auto testDevice = OpenVulkanTestDevice();
+        if (!testDevice) return VulkanTestSkipped;
+        auto& device = *testDevice;
         const auto target = device.Target();
         if (!target.mesh.has_value()) {
-            std::puts("Mesh tests skipped: the device has no VK_EXT_mesh_shader");
-            return 0;
+            std::puts("skipped, the device has no VK_EXT_mesh_shader");
+            return VulkanTestSkipped;
+        }
+        if (device.DeviceName().starts_with("llvmpipe")) {
+            std::puts("skipped, the device has no mesh shader compiler that handles these programs (llvmpipe)");
+            return VulkanTestSkipped;
         }
 
         for (const auto& [name, subgroup] : {std::pair{"one-wave subgroups", SmallSubgroup}, std::pair{"two-wave subgroups", WideSubgroup}}) {
@@ -255,6 +271,17 @@ int main() {
             ClearPixels();
             DrawMesh(device, {subgroup, {0, static_cast<std::uint32_t>(Ordered.size()), 0, 1, 0, false}, VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size()))});
             CheckTriangles((std::string("non-indexed triangle list, ") + name).c_str());
+        }
+
+        auto wave32Subgroup = SmallSubgroup;
+        wave32Subgroup.threadsPerGroup = 32u;
+        for (const auto& subgroup : {wave32Subgroup, SmallSubgroup, WideSubgroup}) {
+            ClearPixels();
+            DrawMesh(device, {subgroup, {reinterpret_cast<std::uintptr_t>(Indices.data()), static_cast<std::uint32_t>(Indices.size()), 2, 1, 0, true}, VertexBufferDescriptor(Scrambled.data(), static_cast<std::uint32_t>(Scrambled.size())), ShaderRecompiler::MeshDrawPushOffsetBytes, false, 32u});
+            CheckTriangles("indexed wave32 triangle list");
+            ClearPixels();
+            DrawMesh(device, {subgroup, {0, static_cast<std::uint32_t>(Ordered.size()), 0, 1, 0, false}, VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size())), ShaderRecompiler::MeshDrawPushOffsetBytes, false, 32u});
+            CheckTriangles("non-indexed wave32 triangle list");
         }
 
         constexpr std::size_t recordBlockBytes = 65536;

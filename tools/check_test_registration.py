@@ -5,11 +5,7 @@ from pathlib import Path
 
 TEST_OUTPUT = r"tests[\\/]"
 
-KNOWN_UNRUN = {
-    "agc_driver_mesh_tests",
-    "agc_driver_recorder_tests",
-    "video_out_flip_tests",
-}
+KNOWN_UNRUN = set()
 
 
 def built(build):

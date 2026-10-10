@@ -111,11 +111,15 @@ struct SpirvEmitterState {
     std::uint32_t bdaWritePointerFunction = 0;
     std::uint32_t bdaAtomicPointerFunction = 0;
     std::uint32_t bdaNoteWriteFunction = 0;
+    std::array<std::uint32_t, 2> bdaByteWriteFunctions {};
     std::uint32_t bdaFaultFunction = 0;
+    bool nativeF16ModesEmitted = false;
     std::array<std::array<std::uint32_t, 2>, 2> bdaDwordReadFunctions {};
+    std::array<std::array<std::uint32_t, 2>, 2> bdaSpanReadFunctions {};
     std::uint32_t bdaStopValue = 0;
     // False for programs with workgroup barriers: faulting BDA accesses then continue (see BdaInvocationsMayStop).
     bool bdaStopsInvocations = true;
+    bool continueTarget = false;
     // Execution scope of the barriers that keep one guest wave's LDS accesses in program order across
     // host invocations (see WaveLdsScope); 0 when none are emitted.
     std::uint32_t waveLdsScope = 0;
