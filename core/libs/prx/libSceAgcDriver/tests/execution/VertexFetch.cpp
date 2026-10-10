@@ -120,8 +120,6 @@ void Run(AgcDriver::VulkanDevice& device) {
             Require(pixels[index] == std::byte{255} && pixels[index + 1u] == std::byte{0} && pixels[index + 2u] == std::byte{0} && pixels[index + 3u] == std::byte{255}, "runtime vertex fetch produced the wrong triangle");
         }
 
-        // AGC accepts byte-sized indices, while Vulkan only exposes 16- and 32-bit
-        // index buffers. Exercise the driver's widening path with a complete GPU draw.
         constexpr std::array<std::uint8_t, 3> byteIndices{0u, 1u, 2u};
         AgcDriver::Pm4::DrawParameters indexedDraw{
             reinterpret_cast<std::uintptr_t>(byteIndices.data()),
