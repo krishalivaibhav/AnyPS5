@@ -536,8 +536,7 @@ int main(int argc, char** argv) {
     try {
         Require(argc == 1 || (argc == 2 && (std::string_view(argv[1]) == "--indirect" || std::string_view(argv[1]) == "--fail-before-registration" || std::string_view(argv[1]) == "--deferred" || std::string_view(argv[1]) == "--deferred-undecodable" || std::string_view(argv[1]) == "--small-stack-registration")), "invalid test arguments");
         if (argc == 2 && std::string_view(argv[1]) == "--small-stack-registration") {
-            auto device = OpenVulkanTestDevice();
-            if (!device) return VulkanTestSkipped;
+            if (!OpenVulkanTestDevice()) return VulkanTestSkipped;
             SmallStackRegistration();
             std::cout << "small guest-stack shader registration test passed\n";
             return 0;
