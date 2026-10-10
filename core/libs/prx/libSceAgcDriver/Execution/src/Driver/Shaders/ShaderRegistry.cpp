@@ -469,9 +469,12 @@ std::unique_ptr<RegisteredPreparation> PlanRegistered(const ShaderSnapshot& snap
         wave = (routing & 0x00400000u) != 0 ? 32u : 64u;
         if ((routing & 0x20u) != 0 || stage == Stage::Mesh || (routing & 4u) != 0) {
             if (registration) return nullptr;
-            auto stageState = state;
-            stageState.context[0x1b6] = 0;
-            const auto stages = Graphics::DecodeShaderStages(stageState);
+            auto stageState = std::make_unique<QueueState>();
+            stageState->shader = state.shader;
+            stageState->context = state.context;
+            stageState->userConfig = state.userConfig;
+            stageState->context[0x1b6] = 0;
+            const auto stages = Graphics::DecodeShaderStages(*stageState);
             graphics = ShaderRecompiler::GraphicsCompileContext{0, {}, stages.mesh, stages.tessellation, {}};
             if (stages.mesh) { stage = Stage::Mesh; firstUser = 0; }
             if (stages.tessellation && snapshot.type == 2) stage = Stage::TessellationEvaluation;
