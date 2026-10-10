@@ -971,6 +971,9 @@ if(BUILD_TESTING)
         if(WIN32)
             set_tests_properties(${preparedTest} PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
         endif()
+        if(preparedMode STREQUAL "small_stack_registration")
+            set_tests_properties(${preparedTest} PROPERTIES TIMEOUT 30)
+        endif()
     endforeach()
     set_tests_properties(agc_driver_prepared_shaders
         agc_driver_prepared_shaders_indirect agc_driver_prepared_shaders_uncached
