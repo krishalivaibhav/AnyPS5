@@ -31,6 +31,7 @@ if(BUILD_TESTING)
 
     add_test_executable(audio_out_shutdown_tests tests/AudioOutShutdown.cpp src/AudioOut.cpp)
     target_include_directories(audio_out_shutdown_tests PRIVATE ${LIBS_INCLUDE_DIR} ${ANYPS5_SDL2_INCLUDE_DIR})
+    target_compile_definitions(audio_out_shutdown_tests PRIVATE sceKernelGetProcessTime=AudioShutdownClock_nid_no_patch)
     target_link_libraries(audio_out_shutdown_tests PRIVATE libc SDL2-static)
     configure_windows_unwind(audio_out_shutdown_tests)
     add_test(NAME audio_out_shutdown COMMAND audio_out_shutdown_tests)

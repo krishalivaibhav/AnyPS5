@@ -44,7 +44,7 @@ void CountShutdown() {
 }
 }
 
-extern "C" std::uint64_t APS5_VABI sceKernelGetProcessTime() {
+extern "C" std::uint64_t APS5_VABI AudioShutdownClock_nid_no_patch() {
     if (traceOutput) {
         outputEntered.store(true);
         outputEntered.notify_all();
