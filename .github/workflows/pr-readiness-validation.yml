@@ -1,0 +1,139 @@
+name: Focused PR readiness validation
+on:
+  push:
+    branches: [codex/pr-readiness-validation]
+permissions:
+  contents: read
+concurrency:
+  group: pr-readiness-validation
+  cancel-in-progress: true
+jobs:
+  focused:
+    name: PR ${{ matrix.pr }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - pr: 4994
+            os: ubuntu-latest
+            sha: 99ae2e812b20d9f3d6f84685948d07de3ee45dbe
+            targets: guest_path_lifetime_tests guest_working_directory_tests guest_exit_order_tests
+            filter: ^(guest_path_lifetime|guest_working_directory|guest_exit_order)$
+            control: core/libs/prx/libc/src/General.cpp
+            control_filter: ^guest_path_lifetime$
+          - pr: 5073
+            os: ubuntu-latest
+            sha: 3c0fa76211cc3c4f7e65d9454f00b01d22c8fc47
+            targets: guest_memory_lifetime_tests guest_memory_tests guest_exit_order_tests application_heap_tests
+            filter: ^(guest_memory_lifetime|guest_memory|guest_exit_order|application_heap_exit_order)$
+            control: core/libs/prx/libc/include/WindowsMappings.hpp core/libs/prx/libc/src/GuestAllocations.cpp core/libs/prx/libc/src/GuestArena.cpp core/libs/prx/libc/src/GuestWriteWatch.cpp core/libs/prx/libkernel/DirectMemory/DirectMemory.cpp core/libs/prx/libkernel/DirectMemory/MemoryPool.cpp
+            control_filter: ^guest_memory_lifetime$
+          - pr: 4824
+            os: ubuntu-latest
+            sha: 0976b1eb421061b75077b3e537ea7c8160330b45
+            targets: agc_driver_bounded_index_fetch_tests agc_driver_pm4_tests
+            filter: ^(agc_driver_bounded_index_fetch|agc_driver_pm4_failure|agc_driver_pm4_priority_refused)$
+            control: ''
+            control_filter: ''
+          - pr: 5073
+            os: windows-latest
+            sha: 3c0fa76211cc3c4f7e65d9454f00b01d22c8fc47
+            targets: guest_memory_tests
+            filter: ^guest_memory$
+            control: ''
+            control_filter: ''
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    env:
+      WINLIBS_RELEASE: 15.2.0posix-14.0.0-ucrt-r7
+      WINLIBS_ZIP: winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-14.0.0-r7.zip
+      TARGETS: ${{ matrix.targets }}
+      FILTER: ${{ matrix.filter }}
+      CONTROL_FILES: ${{ matrix.control }}
+      CONTROL_FILTER: ${{ matrix.control_filter }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 2
+          submodules: true
+          persist-credentials: false
+      - name: Record exact tested source
+        run: |
+          test "$(git rev-parse HEAD)" = '${{ matrix.sha }}'
+          git show -s --format=fuller HEAD | tee source.txt
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvulkan1 mesa-vulkan-drivers libpipewire-0.3-dev libpulse-dev libasound2-dev libxrandr-dev
+      - if: runner.os == 'Windows'
+        id: toolchain
+        uses: actions/cache@v6
+        with:
+          path: C:\winlibs
+          key: ${{ env.WINLIBS_ZIP }}
+      - if: runner.os == 'Windows' && steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/winlibs.zip" "https://github.com/brechtsanders/winlibs_mingw/releases/download/$WINLIBS_RELEASE/$WINLIBS_ZIP"
+          7z x "$RUNNER_TEMP/winlibs.zip" -oC:/winlibs > /dev/null
+      - if: runner.os == 'Windows'
+        run: |
+          echo 'C:\winlibs\mingw64\bin' >> "$GITHUB_PATH"
+          echo 'SSL_CERT_FILE=C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt' >> "$GITHUB_ENV"
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: readiness-${{ matrix.pr }}-${{ runner.os }}
+          save: false
+      - name: Configure actual runtime and build focused targets
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DANYPS5_ENABLE_SPIRV_TOOLS=ON -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --target $TARGETS --parallel 2
+      - name: Repeat candidate runtime tests
+        run: |
+          ctest --test-dir build -R "$FILTER" --no-tests=error --output-on-failure --repeat until-fail:3 --timeout 30 --output-log candidate.log --output-junit candidate.xml
+          python3 -c "import xml.etree.ElementTree as E; r=E.parse('build/candidate.xml').getroot(); assert list(r.iter('testcase')), 'no test cases'; assert not list(r.iter('skipped')), 'skipped tests are not validation'"
+      - name: Production-only negative control and restoration
+        if: matrix.control != ''
+        run: |
+          git checkout HEAD^ -- $CONTROL_FILES
+          cmake --build build --target $TARGETS --parallel 2
+          set +e
+          ctest --test-dir build -R "$CONTROL_FILTER" --no-tests=error --output-on-failure --timeout 30 --output-log negative-control.log --output-junit negative-control.xml
+          result=$?
+          set -e
+          test "$result" -ne 0
+          python3 -c "import os, xml.etree.ElementTree as E; r=E.parse('build/negative-control.xml').getroot(); c=list(r.iter('testcase')); expected=os.environ['CONTROL_FILTER'].strip('^$'); assert len(c)==1 and c[0].get('name')==expected, 'negative control did not run its expected test'; assert c[0].find('failure') is not None and c[0].find('skipped') is None, 'negative control did not fail'; text=E.tostring(c[0],encoding='unicode').lower(); assert 'load failed' not in text and 'timeout' not in text, 'infrastructure failure is not a lifetime reproduction'"
+          git checkout HEAD -- $CONTROL_FILES
+          cmake --build build --target $TARGETS --parallel 2
+          ctest --test-dir build -R "$FILTER" --no-tests=error --output-on-failure --repeat until-fail:3 --timeout 30 --output-log restored-candidate.log --output-junit restored-candidate.xml
+          python3 -c "import xml.etree.ElementTree as E; r=E.parse('build/restored-candidate.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped')), 'missing or skipped restored tests'"
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Windows normal write-watch behavior (not exit-lifetime coverage)
+        if: runner.os == 'Windows'
+        run: |
+          cmake -S core/libs/tests/write_watch -B write-watch -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++
+          cmake --build write-watch --parallel 2
+          ctest --test-dir write-watch --no-tests=error --output-on-failure --repeat until-fail:3 --timeout 30 --output-log write-watch.log --output-junit write-watch.xml
+          python3 -c "import xml.etree.ElementTree as E; r=E.parse('write-watch/write-watch.xml').getroot(); assert len(list(r.iter('testcase')))==8 and not list(r.iter('skipped')), 'missing or skipped write-watch tests'"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: readiness-${{ matrix.pr }}-${{ runner.os }}
+          path: |
+            source.txt
+            build/negative-control.xml
+            build/restored-candidate.xml
+            write-watch/write-watch.xml
+            build/candidate.xml
+            build/candidate.log
+            build/negative-control.log
+            build/restored-candidate.log
+            write-watch/write-watch.log
+            candidate.log
+            negative-control.log
+            restored-candidate.log
+            write-watch.log
+            build/CMakeFiles/CMakeConfigureLog.yaml
