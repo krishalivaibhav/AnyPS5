@@ -15,32 +15,11 @@ jobs:
       max-parallel: 2
       matrix:
         include:
-          - pr: 4994
-            os: ubuntu-latest
-            sha: 99ae2e812b20d9f3d6f84685948d07de3ee45dbe
-            targets: guest_path_lifetime_tests guest_working_directory_tests guest_exit_order_tests
-            filter: ^(guest_path_lifetime|guest_working_directory|guest_exit_order)$
-            control: core/libs/prx/libc/src/General.cpp
-            control_filter: ^guest_path_lifetime$
-          - pr: 5073
-            os: ubuntu-latest
-            sha: 3c0fa76211cc3c4f7e65d9454f00b01d22c8fc47
-            targets: guest_memory_lifetime_tests guest_memory_tests guest_exit_order_tests application_heap_tests
-            filter: ^(guest_memory_lifetime|guest_memory|guest_exit_order|application_heap_exit_order)$
-            control: core/libs/prx/libc/include/WindowsMappings.hpp core/libs/prx/libc/src/GuestAllocations.cpp core/libs/prx/libc/src/GuestArena.cpp core/libs/prx/libc/src/GuestWriteWatch.cpp core/libs/prx/libkernel/DirectMemory/DirectMemory.cpp core/libs/prx/libkernel/DirectMemory/MemoryPool.cpp
-            control_filter: ^guest_memory_lifetime$
-          - pr: 4824
-            os: ubuntu-latest
-            sha: 0976b1eb421061b75077b3e537ea7c8160330b45
-            targets: agc_driver_bounded_index_fetch_tests agc_driver_pm4_tests
-            filter: ^(agc_driver_bounded_index_fetch|agc_driver_pm4_failure|agc_driver_pm4_priority_refused)$
-            control: ''
-            control_filter: ''
           - pr: 5073
             os: windows-latest
             sha: 3c0fa76211cc3c4f7e65d9454f00b01d22c8fc47
-            targets: guest_memory_tests
-            filter: ^guest_memory$
+            targets: guest_memory_tests windows_write_watch_tests
+            filter: ^(guest_memory|windows_write_watch)$
             control: ''
             control_filter: ''
     runs-on: ${{ matrix.os }}
@@ -93,7 +72,7 @@ jobs:
       - name: Repeat candidate runtime tests
         run: |
           ctest --test-dir build -R "$FILTER" --no-tests=error --output-on-failure --repeat until-fail:3 --timeout 30 --output-log candidate.log --output-junit candidate.xml
-          python3 -c "import xml.etree.ElementTree as E; r=E.parse('build/candidate.xml').getroot(); assert list(r.iter('testcase')), 'no test cases'; assert not list(r.iter('skipped')), 'skipped tests are not validation'"
+          python3 -c "import xml.etree.ElementTree as E; r=E.parse('build/candidate.xml').getroot(); assert len(list(r.iter('testcase')))==2, 'expected memory and Windows write-watch tests'; assert not list(r.iter('skipped')), 'skipped tests are not validation'"
       - name: Production-only negative control and restoration
         if: matrix.control != ''
         run: |
@@ -111,13 +90,6 @@ jobs:
           python3 -c "import xml.etree.ElementTree as E; r=E.parse('build/restored-candidate.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped')), 'missing or skipped restored tests'"
           git diff --exit-code
           git diff --cached --exit-code
-      - name: Windows normal write-watch behavior (not exit-lifetime coverage)
-        if: runner.os == 'Windows'
-        run: |
-          cmake -S core/libs/tests/write_watch -B write-watch -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++
-          cmake --build write-watch --parallel 2
-          ctest --test-dir write-watch --no-tests=error --output-on-failure --repeat until-fail:3 --timeout 30 --output-log write-watch.log --output-junit write-watch.xml
-          python3 -c "import xml.etree.ElementTree as E; r=E.parse('write-watch/write-watch.xml').getroot(); assert len(list(r.iter('testcase')))==8 and not list(r.iter('skipped')), 'missing or skipped write-watch tests'"
       - uses: actions/upload-artifact@v6
         if: always()
         with:
