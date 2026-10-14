@@ -29,7 +29,7 @@ if(BUILD_TESTING)
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
 
-    add_test_executable(audio_out_shutdown_tests tests/AudioOutShutdown.cpp src/AudioOut.cpp)
+    add_test_executable(audio_out_shutdown_tests tests/AudioOutShutdown.cpp src/AudioOut.cpp src/AudioOutSdl.cpp)
     target_include_directories(audio_out_shutdown_tests PRIVATE ${LIBS_INCLUDE_DIR} ${ANYPS5_SDL2_INCLUDE_DIR})
     target_compile_definitions(audio_out_shutdown_tests PRIVATE sceKernelGetProcessTime=AudioShutdownClock_nid_no_patch)
     target_link_libraries(audio_out_shutdown_tests PRIVATE libc SDL2-static)
